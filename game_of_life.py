@@ -12,6 +12,93 @@ import os
 from matplotlib.colors import ListedColormap
 import argparse
 from scipy.optimize import curve_fit
+from numba import njit
+
+@njit
+def gol_step_numba(lattice):
+    """
+    Performs one step of Conway's Game of Life.
+    Uses Numba for high-speed synchronous updates.
+    """
+    n, m = lattice.shape
+    new_lattice = np.empty_like(lattice)
+    
+    for i in range(n):
+        for j in range(m):
+            # Explicitly count 8 neighbors with periodic boundaries
+            # Numba handles these loops much faster than np.roll
+            live_neighbors = (
+                lattice[(i - 1) % n, (j - 1) % m] +
+                lattice[(i - 1) % n, j] +
+                lattice[(i - 1) % n, (j + 1) % m] +
+                lattice[i, (j - 1) % m] +
+                lattice[i, (j + 1) % m] +
+                lattice[(i + 1) % n, (j - 1) % m] +
+                lattice[(i + 1) % n, j] +
+                lattice[(i + 1) % n, (j + 1) % m]
+            )
+            
+            # Application of rules
+            if lattice[i, j] == 1:
+                if live_neighbors < 2 or live_neighbors > 3:
+                    new_lattice[i, j] = 0
+                else:
+                    new_lattice[i, j] = 1
+            else:
+                if live_neighbors == 3:
+                    new_lattice[i, j] = 1
+                else:
+                    new_lattice[i, j] = 0
+                    
+    return new_lattice
+
+@njit
+def calculate_sum_numba(lattice):
+    """Fast sum of alive sites."""
+    return np.sum(lattice)
+
+@njit
+def run_until_equilibrium_numba(lattice, max_time):
+    """
+    Runs a single simulation until max_time or equilibrium.
+    Returns the time taken and the final active sites list.
+    """
+    # Numba doesn't handle complex list comparisons well, 
+    # so we track the last few total counts in a small array
+    history = np.zeros(15, dtype=np.int32)
+    time = 0
+    
+    current_lattice = lattice.copy()
+    
+    while time < max_time:
+        current_lattice = gol_step_numba(current_lattice)
+        total = np.sum(current_lattice)
+        
+        # Shift history
+        for i in range(14):
+            history[i] = history[i+1]
+        history[14] = total
+        
+        time += 1
+        
+        if time > 15:
+            # Check Period 1 (Static)
+            is_static = True
+            for i in range(10):
+                if history[14-i] != history[13-i]:
+                    is_static = False
+                    break
+            if is_static: break
+            
+            # Check Period 2
+            is_p2 = True
+            for i in range(10):
+                if history[14-i] != history[12-i]:
+                    is_p2 = False
+                    break
+            if is_p2: break
+            
+    return time
 
 class GameOfLife(object):
     """
@@ -96,121 +183,6 @@ class GameOfLife(object):
             self.lattice[i, j] = 1
             self.lattice[i - 1, j] = 1
             self.lattice[i + 1, j] = 1
-            
-    def alive_or_dead(self, i, j):
-        """
-        Determine the next state of a specific cell (i, j) based on 
-        Conway's Game of Life rules using a 8 neighbours.
-
-        Parameters
-        ----------
-        i : int
-            Lattice corrdinate of the cell.
-        j : int
-            Lattice coordinate of the cell.
-
-        Returns
-        -------
-        int
-            DESCRIPTION.
-
-        """
-        
-        # Obtain the site 
-        cell = self.lattice[i, j]
-        
-        # Count the number of live neighbours, accounting for periodic boundaries
-        live_neighbours = int(self.lattice[(i - 1) % self.n, (j - 1) % self.n] + 
-                              self.lattice[(i - 1) % self.n, j] + 
-                              self.lattice[(i - 1) % self.n, (j + 1) % self.n] + 
-                              self.lattice[i, (j - 1) % self.n] + 
-                              self.lattice[i, (j +  1) % self.n] + 
-                              self.lattice[(i + 1) % self.n, (j - 1) % self.n] + 
-                              self.lattice[(i + 1) % self.n, j] + 
-                              self.lattice[(i + 1) % self.n, (j + 1) % self.n])
-        
-        # If the cell is live ...
-        if cell == 1: 
-            
-            # If live neighbours < 2 or > 3, the cell dies
-            if live_neighbours < 2 or live_neighbours > 3:
-                 return 0
-                
-             # Otherwise, it lives
-            else:  
-                 return 1
-        
-        # If the cell is dead ...
-        else: 
-            
-            # live neighbours == 3, cell is alive
-            if live_neighbours == 3:
-                return 1
-            
-            # Otherwise, it stays dead
-            else:
-                return 0
-                
-    def update_lattice(self):
-        """
-        Update the entire lattice simultaneously (synchronous update) 
-        using an iterative loop.
-
-        Returns
-        -------
-        np.ndarray
-            The updated lattice state.
-
-        """
-        
-        # Keep old lattice to check for updates
-        lattice_new = np.zeros((self.n, self.n))
-        
-        # Iterate through the whole lattice
-        # Update the new lattice at each iteration
-        for i in range(self.n):
-            
-            for j in range(self.n):
-            
-                lattice_new[i, j] = self.alive_or_dead(i, j)
-                
-        # Once done, update the main lattice simultaneously
-        self.lattice = lattice_new
-                
-        return self.lattice
-
-    def update_lattice_faster(self):
-        """
-        Update the entire lattice simultaneously using vectorised NumPy roll 
-        operations, taking into account the 8 neighbours.
-
-        Returns
-        -------
-        None.
-
-        """
-        
-        # Count the number of alive nearest neighbours
-        live_neighbours = (np.roll(self.lattice,  1, axis=0) + # North
-                           np.roll(self.lattice, -1, axis=0) + # South
-                           np.roll(self.lattice,  1, axis=1) + # East
-                           np.roll(self.lattice, -1, axis=1) + # West
-                           np.roll(np.roll(self.lattice,  1, axis=0),  1, axis=1) + # NE
-                           np.roll(np.roll(self.lattice,  1, axis=0), -1, axis=1) + # NW
-                           np.roll(np.roll(self.lattice, -1, axis=0),  1, axis=1) + # SE
-                           np.roll(np.roll(self.lattice, -1, axis=0), -1, axis=1))   # SW
-              
-        # Make a new lattice of zeros
-        lattice_new = np.zeros((self.n, self.n), dtype = int)
-        
-        # Live cell survives with 2 or 3 neighbours
-        lattice_new[(self.lattice == 1) & ((live_neighbours == 2) | (live_neighbours == 3))] = 1
-        
-        # Dead cell becomes alive with exactly 3 neighbours
-        lattice_new[(self.lattice == 0) & (live_neighbours == 3)] = 1
-        
-        # Once done, update lattice
-        self.lattice = lattice_new
 
     def total_alive_sites(self):
         """
@@ -225,6 +197,12 @@ class GameOfLife(object):
         
         # Calculate and return the total number of alive cells in the lattice
         return np.sum(self.lattice)
+    
+    def update_lattice(self):
+        """
+        Update the lattice using the Numba-compiled function.
+        """
+        self.lattice = gol_step_numba(self.lattice.astype(np.int32))
         
     def center_of_mass(self):
         """
@@ -425,45 +403,24 @@ class Simulation(object):
         
         # Iterate through simulation steps
         for s in range(steps):
-            print(f"Simulating step = {s}/{steps}")
+            print(f"\rSimulating step = {s + 1}/{steps}...", end="", flush=True)
             
             # Initialise the lattice using the GameOfLife class
             game_of_life = GameOfLife(self.n, self.init_cond, self.p_alive)
             game_of_life.initialise()
             
-            # Empty list to hold number of active sites
-            active_sites = []
+            # Run the optimised Numba runner
+            time_taken = run_until_equilibrium_numba(
+                game_of_life.lattice.astype(np.int32), 
+                max_time)
             
-            # Set equilibrium as False at the beginning
-            equilibrium = False
+            equilibriation_time.append(time_taken)
             
-            # Set time to zero
-            time = 0
-            
-            # Continue until equilibrium has been reached
-            while equilibrium == False and time < max_time:
-                
-                # Update lattice
-                game_of_life.update_lattice_faster()
-                
-                active_sites.append(game_of_life.total_alive_sites())
-                
-                # Update time
-                time += 1
-                
-                if time == max_time - 1:
-                    print(active_sites[-10:])
-                    print("Maximum time reached.")
-
-                # Check if equilibrium has been reached
-                equilibrium = self.equilibrium_check(active_sites) # Can change ind_cond if needed
-                
-            # Append values to the lists
-            equilibriation_time.append(time)
+        print() # Add this to move to a new line after the bar reaches 100%
             
         # Open in "a" (append) or "w" (overwrite) mode
         # Write the values into the specified file
-        with open(file_path, "a") as f:
+        with open(file_path, "w") as f:
             for i in range(len(equilibriation_time)):
                 
                 # Get the time it took
@@ -522,7 +479,7 @@ class Simulation(object):
             #print(f"Simulating step = {s}/{steps}")
             
             # Update lattice
-            game_of_life.update_lattice_faster()
+            game_of_life.update_lattice()
             
             # Calculate glider center of mass
             x_raw, y_raw = game_of_life.center_of_mass()
