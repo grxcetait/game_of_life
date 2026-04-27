@@ -17,15 +17,30 @@ from numba import njit
 @njit
 def gol_step_numba(lattice):
     """
-    Performs one step of Conway's Game of Life.
-    Uses Numba for high-speed synchronous updates.
+    Performs one step of Conway's Game of Life using Numba.
+    
+    Parameters
+    ----------
+    lattice : numpy.ndarray
+        A 2D array of integers (0 or 1) representing the current lattice state.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 2D array representing the updated state of the lattice.
     """
+    
+    # Obtain the site
     n, m = lattice.shape
+    
+    # Copy the lattice 
     new_lattice = np.empty_like(lattice)
     
+    # Iterate through the lattice
     for i in range(n):
         for j in range(m):
-            # Explicitly count 8 neighbors with periodic boundaries
+            
+            # Count 8 neighbors with periodic boundaries
             # Numba handles these loops much faster than np.roll
             live_neighbors = (
                 lattice[(i - 1) % n, (j - 1) % m] +
@@ -35,53 +50,101 @@ def gol_step_numba(lattice):
                 lattice[i, (j + 1) % m] +
                 lattice[(i + 1) % n, (j - 1) % m] +
                 lattice[(i + 1) % n, j] +
-                lattice[(i + 1) % n, (j + 1) % m]
-            )
+                lattice[(i + 1) % n, (j + 1) % m])
             
-            # Application of rules
+            # If the cell is live ...
             if lattice[i, j] == 1:
+                
+                # If live neighbours < 2 or > 3, the cell dies
                 if live_neighbors < 2 or live_neighbors > 3:
                     new_lattice[i, j] = 0
+                    
+                # Otherwise, it lives
                 else:
                     new_lattice[i, j] = 1
+                    
+            # If the cell is dead ...
             else:
+                
+                # live neighbours == 3, cell is alive
                 if live_neighbors == 3:
                     new_lattice[i, j] = 1
+                    
+                # Otherwise, it stays dead
                 else:
                     new_lattice[i, j] = 0
                     
+    # Once done, return the the new lattice
     return new_lattice
 
 @njit
 def calculate_sum_numba(lattice):
-    """Fast sum of alive sites."""
+    """
+    Count the total number of alive cells (state 1) in the current lattice.
+    
+    Parameters
+    ----------
+    lattice : numpy.ndarray
+        A 2D array of integers (0 or 1) representing the current lattice state.
+
+    Returns
+    -------
+    numpy.ndarray
+        A 2D array representing the updated state of the lattice.
+    """
+    
+    # Calculate and return the total number of alive cells in the lattice
     return np.sum(lattice)
 
 @njit
 def run_until_equilibrium_numba(lattice, max_time):
     """
-    Runs a single simulation until max_time or equilibrium.
-    Returns the time taken and the final active sites list.
+    Runs a single simulation until max_time or equilibrium. The simulation has 
+    reached equilibrium by identifying static states (Period 1) or oscillators 
+    (Period 2 and 3). Returns the time taken and the final active sites list.
+    
+    Parameters
+    ----------
+    lattice : numpy.ndarray
+        A 2D array of integers (0 or 1) representing the current lattice state.
+    max_time : int
+        The maximum time a single simulation can run. 
+
+    Returns
+    -------
+    numpy.ndarray
+        A 2D array representing the updated state of the lattice.
     """
-    # Numba doesn't handle complex list comparisons well, 
-    # so we track the last few total counts in a small array
+    
+    # Track the last 15 total counts
     history = np.zeros(15, dtype=np.int32)
+    
+    # Set time to zero 
     time = 0
     
+    # Make a copy of the lattice 
     current_lattice = lattice.copy()
     
+    # Continue until maximum time has been reached 
     while time < max_time:
+        
+        # Update lattice 
         current_lattice = gol_step_numba(current_lattice)
+        
+        # Take the sum of the number of active sites 
         total = np.sum(current_lattice)
         
-        # Shift history
+        # Shift list
         for i in range(14):
             history[i] = history[i+1]
         history[14] = total
         
+        # Update time 
         time += 1
         
+        # Check if equilibrium has been reached 
         if time > 15:
+            
             # Check Period 1 (Static)
             is_static = True
             for i in range(10):
@@ -90,13 +153,21 @@ def run_until_equilibrium_numba(lattice, max_time):
                     break
             if is_static: break
             
-            # Check Period 2
+            # Check Period 2 (Oscillator)
             is_p2 = True
             for i in range(10):
                 if history[14-i] != history[12-i]:
                     is_p2 = False
                     break
             if is_p2: break
+        
+            # Check Period 3 (Oscillator)
+            is_p3 = True
+            for i in range(9):
+                if history[14-i] != history[11-i]:
+                    is_p3 = False
+                    break
+            if is_p3: break
             
     return time
 
@@ -152,12 +223,12 @@ class GameOfLife(object):
             # Where p_alive is the probability a site is alive (1)
             # The default is p_alive = 0.5
             self.lattice = np.random.choice([0, 1], size = (self.n, self.n),
-                                            p = [1 - self.p_alive, self.p_alive])
+                                            p = [1 - self.p_alive, self.p_alive]).astype(np.int32)
             
         elif self.init_cond == 'glider':
             
             # Create a lattice that has a glider
-            self.lattice = np.zeros((self.n, self.n))
+            self.lattice = np.zeros((self.n, self.n)).astype(np.int32)
             
             # Start the glider in the middle of the lattice
             i = self.n // 2 
@@ -173,7 +244,7 @@ class GameOfLife(object):
         else:
             
             # Create a lattice
-            self.lattice = np.zeros((self.n, self.n))
+            self.lattice = np.zeros((self.n, self.n)).astype(np.int32)
             
             # Choose a random site
             i = np.random.randint(self.n)
@@ -181,8 +252,8 @@ class GameOfLife(object):
             
             # Put in a blinker
             self.lattice[i, j] = 1
-            self.lattice[i - 1, j] = 1
-            self.lattice[i + 1, j] = 1
+            self.lattice[(i - 1) % self.n, j] = 1
+            self.lattice[(i + 1) % self.n, j] = 1
 
     def total_alive_sites(self):
         """
@@ -201,8 +272,13 @@ class GameOfLife(object):
     def update_lattice(self):
         """
         Update the lattice using the Numba-compiled function.
+        
+        Returns
+        -------
+        None.
         """
-        self.lattice = gol_step_numba(self.lattice.astype(np.int32))
+        
+        self.lattice = gol_step_numba(self.lattice)
         
     def center_of_mass(self):
         """
@@ -272,14 +348,9 @@ class Simulation(object):
         self.steps = steps # Choice of number of steps for the animation
         self.p_alive = p_alive # Choice of number of cells that are alive
         
-    def animate(self, steps):
+    def animate(self):
         """
         Execute and display a real-time animation of the Game of Life evolution.
-
-        Parameters
-        ----------
-        steps : int
-            Number of frames to animate.
 
         Returns
         -------
@@ -303,10 +374,10 @@ class Simulation(object):
                        vmin = 0, vmax = 1)
         
         # Run the animation for the total number of steps
-        for s in range(steps):
+        for s in range(self.steps):
             
-            # Update lattice
-            game_of_life.update_lattice_faster()
+            # Update lattice using the Numba function
+            game_of_life.update_lattice()
             
             # Update the animation 
             im.set_data(game_of_life.lattice)
@@ -317,54 +388,6 @@ class Simulation(object):
             
         # Keep the final image open when the loop finishes
         plt.show()
-        
-    def equilibrium_check(self, active_sites, ind_cond = 10):
-        """
-        Check if the simulation has reached equilibrium by identifying 
-        static states (Period 1) or oscillators (Period 2 and 3).
-
-        Parameters
-        ----------
-        active_sites : list
-            Record of the total number of alive cells.
-        ind_cond : int, optional
-            The minimum window size required for the check. Default is 10.
-
-        Returns
-        -------
-        bool
-            True if equilibrium (periodicity) is detected, False otherwise.
-
-        """
- 
-        # If the array if not long enough, return False
-        if len(active_sites) < ind_cond:
-            return False
-        
-        # Check if it is static
-        # Checks to see if the last 10 elements are the same
-        if active_sites[-10:] == active_sites[-11:-1]:
-            #print("System is static (Period 1)")
-            #print(active_sites[-10:])
-            return True
-        
-        # Check if it is oscillating with a period of 2
-        # Checks to see if the last 10 elements are oscillating
-        elif active_sites[-10:] == active_sites[-12:-2]:
-            print("Oscilalting with period of 2")
-            print(active_sites[-12:])
-            return True
-        
-        # Check if it is oscillating with a period of 3
-        # Checks to see if the last 9 elements are oscillating
-        elif active_sites[-9:] == active_sites[-12:-3]:
-            print("Oscilalting with period of 3")
-            print(active_sites[-12:])
-            return True
-        
-        # If not, it is not in equilibrium
-        else:
-            return False
         
     def equilibrium_measurements(self, filename, steps):
         """
@@ -409,7 +432,7 @@ class Simulation(object):
             game_of_life = GameOfLife(self.n, self.init_cond, self.p_alive)
             game_of_life.initialise()
             
-            # Run the optimised Numba runner
+            # Run the optimised Numba function
             time_taken = run_until_equilibrium_numba(
                 game_of_life.lattice.astype(np.int32), 
                 max_time)
@@ -478,7 +501,7 @@ class Simulation(object):
         for s in range(steps):
             #print(f"Simulating step = {s}/{steps}")
             
-            # Update lattice
+            # Update lattice using the Numba function
             game_of_life.update_lattice()
             
             # Calculate glider center of mass
@@ -772,7 +795,7 @@ if __name__ == "__main__":
 
     # User input parameters
     parser.add_argument("--n", type = int, default = 50, help = "Lattice size (n x n)")
-    parser.add_argument("--steps", type = int, default = 1000, help = "Number of simulation steps")
+    parser.add_argument("--steps", type = int, default = 1000, help = "Number of simulation steps or animation frames")
     parser.add_argument("--init", type = str, default = "random", 
                         choices = ["random", "glider", "blinker"],
                         help = "Initial state for Game of Life")
@@ -788,17 +811,17 @@ if __name__ == "__main__":
     
     if args.init == "random" and args.mode == "mea":
         
-        filename = f"game_of_life_equilibrium_distribution_{args.steps}_systems_11.txt" # Change the name
+        filename = f"game_of_life_equilibrium_distribution_{args.steps}_systems.txt"
         sim.equilibrium_measurements(filename, steps = args.steps)
         sim.plot_equilibrium_distribution(filename)
        
     elif args.init == "glider" and args.mode == "mea":
 
-        filename = f"game_of_life_glider_measurements_{args.steps}_steps_5.txt"
+        filename = f"game_of_life_glider_measurements_{args.steps}_steps.txt"
         sim.glider_measurements(filename = filename, steps = args.steps)
         sim.plot_glider_measurements(filename)
         
     else:
     
-        sim.animate(steps = args.steps)
+        sim.animate()
     
